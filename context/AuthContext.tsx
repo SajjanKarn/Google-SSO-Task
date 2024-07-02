@@ -2,6 +2,14 @@ import React, { createContext, useEffect, useState } from "react";
 import * as Google from "expo-auth-session/providers/google";
 import { ActivityIndicator, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as AuthSession from "expo-auth-session";
+
+const CLIENT = {
+  androidClientId:
+    "664038520099-on182g40a9sfeho9seqjhdrg115ff1ui.apps.googleusercontent.com",
+  webClientId:
+    "664038520099-lr4um38v3lshvhkksnhettch5f3p3st6.apps.googleusercontent.com",
+};
 
 interface User {
   id: string;
@@ -33,21 +41,22 @@ export const AuthContextProvider = ({
 }) => {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string>("");
+  const [refreshToken, setRefreshToken] = useState<string>("");
   const [error, setError] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId:
-      "664038520099-on182g40a9sfeho9seqjhdrg115ff1ui.apps.googleusercontent.com",
-    webClientId:
-      "664038520099-lr4um38v3lshvhkksnhettch5f3p3st6.apps.googleusercontent.com",
+    androidClientId: CLIENT.androidClientId,
+    webClientId: CLIENT.webClientId,
   });
 
   const logout = async () => {
     setAccessToken("");
+    setRefreshToken("");
     setUser(null);
     await AsyncStorage.removeItem("user");
     await AsyncStorage.removeItem("accessToken");
+    await AsyncStorage.removeItem("refreshToken");
   };
 
   useEffect(() => {
@@ -55,10 +64,25 @@ export const AuthContextProvider = ({
       try {
         const storedUser = await AsyncStorage.getItem("user");
         const storedAccessToken = await AsyncStorage.getItem("accessToken");
+        const storedRefreshToken = await AsyncStorage.getItem("refreshToken");
 
-        if (storedUser && storedAccessToken) {
+        if (storedUser && storedAccessToken && storedRefreshToken) {
           setUser(JSON.parse(storedUser));
           setAccessToken(storedAccessToken);
+          setRefreshToken(storedRefreshToken);
+
+          // Check if the access token needs to be refreshed
+          const tokenResponse = new AuthSession.TokenResponse({
+            accessToken: storedAccessToken,
+          });
+          if (
+            !AuthSession.TokenResponse.isTokenFresh({
+              expiresIn: tokenResponse.expiresIn,
+              issuedAt: tokenResponse.issuedAt,
+            })
+          ) {
+            await refreshAccessToken(storedRefreshToken);
+          }
         }
       } catch (error) {
         throw new Error("Error loading stored auth");
@@ -74,6 +98,19 @@ export const AuthContextProvider = ({
     if (response?.type === "success") {
       const { authentication } = response;
       setAccessToken(authentication?.accessToken || "");
+      setRefreshToken(authentication?.refreshToken || "");
+
+      const persistAuth = async () => {
+        await AsyncStorage.setItem(
+          "accessToken",
+          authentication?.accessToken || ""
+        );
+        await AsyncStorage.setItem(
+          "refreshToken",
+          authentication?.refreshToken || ""
+        );
+      };
+      persistAuth();
     }
   }, [response]);
 
@@ -85,6 +122,7 @@ export const AuthContextProvider = ({
   const fetchUserInfo = async () => {
     try {
       setLoading(true);
+
       const res = await fetch(`https://www.googleapis.com/userinfo/v2/me`, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -104,12 +142,30 @@ export const AuthContextProvider = ({
       });
 
       await AsyncStorage.setItem("user", JSON.stringify(result));
-      await AsyncStorage.setItem("accessToken", accessToken);
     } catch (error) {
       setError(error);
       console.error("Error fetching user info", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshAccessToken = async (storedRefreshToken: string) => {
+    try {
+      const tokenResult = await AuthSession.refreshAsync(
+        {
+          clientId: CLIENT.androidClientId,
+          refreshToken: storedRefreshToken,
+        },
+        { tokenEndpoint: "https://www.googleapis.com/oauth2/v4/token" }
+      );
+
+      tokenResult.refreshToken = storedRefreshToken;
+
+      setAccessToken(tokenResult.accessToken);
+      await AsyncStorage.setItem("accessToken", tokenResult.accessToken);
+    } catch (error) {
+      console.error("Error refreshing access token", error);
     }
   };
 
