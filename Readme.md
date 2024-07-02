@@ -2,6 +2,8 @@
 
 This guide explains how to run the project that is created using `expo-auth-session` library for Google OAuth Login.
 
+#### Note: I've used an android device for the development
+
 ## Screenshots
 
 ![image](assets/screenshots/1.jpg)
